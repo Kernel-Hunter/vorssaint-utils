@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Vorssaint
 
 import AppKit
+import Carbon.HIToolbox
 import Metal
 import QuartzCore
 
@@ -278,20 +279,24 @@ final class ExtraBrightnessService: ObservableObject {
     /// until the transition ended and a rebuild brought it back (measured).
     /// Resident everywhere there is no handoff at all, and the presents that
     /// hold the panel's headroom never pause.
+    ///
+    /// `.canJoinAllApplications` was dropped: with it present, SecurityAgent's
+    /// Touch ID / password panel and the Mac App Store's PassKit purchase
+    /// sheet never became visible while the overlay was up, at any window
+    /// level tried (shield level, shield level minus one, screen-saver
+    /// level) and regardless of Secure Event Input state (confirmed off
+    /// throughout a failing repro, so that was not the mechanism either).
+    /// A window that can join every other application's Spaces, not just
+    /// this app's own, is unusual enough that it is the leading remaining
+    /// suspect for whatever check keeps those panels from rendering.
     private static let overlayCollectionBehavior: NSWindow.CollectionBehavior = [
-        .ignoresCycle, .fullScreenAuxiliary, .canJoinAllApplications,
-        .canJoinAllSpaces, .stationary,
+        .ignoresCycle, .fullScreenAuxiliary, .canJoinAllSpaces, .stationary,
     ]
 
     /// Desktop and window-overview transitions composite above ordinary
-    /// screen-saver windows. Keep the multiplier and its headroom trigger
-    /// just below the display-shield level so both remain in the final
-    /// picture, one level below the exact shield level so system security
-    /// UI (SecurityAgent's Touch ID / password panels, e.g. the Mac App
-    /// Store purchase confirmation) still wins the top slot and can render.
-    /// Sharing the exact shield level with the overlay was observed to
-    /// prevent those system panels from appearing at all.
-    private static let overlayWindowLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) - 1)
+    /// screen-saver windows, so the multiplier and its headroom trigger stay
+    /// at the display-shield level to remain in the final picture.
+    private static let overlayWindowLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
 
     // MARK: - Overlay
 
@@ -421,6 +426,29 @@ final class ExtraBrightnessService: ObservableObject {
     private func renderIfNeeded(immediate: Bool = false) {
         guard !screensAsleep else { return }
         guard let screen = overlayScreen, overlayLayer != nil else { return }
+        // Secure Event Input is macOS's signal that a password field wants
+        // the screen to itself; stepping out of the way while it is on is
+        // cheap insurance. It was NOT what caused the Mac App Store's
+        // PassKit purchase sheet to stay hidden behind this overlay in a
+        // reproduced case: the flag read false for the whole failure. Kept
+        // in case it covers some other authorization path, not relied on.
+        //
+        // The App Store itself is the confirmed, reproducible case: its
+        // purchase-authorization sheet (free "Get" installs included, which
+        // still route through a PassKit-style confirmation) stayed hidden
+        // behind this overlay across every window level and collection
+        // behavior tried. Nothing needs the boost while the App Store is
+        // frontmost, so stepping out of the way whenever it is trades away
+        // nothing to stop blocking its purchase flow.
+        let appStoreIsFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+            == "com.apple.AppStore"
+        guard !IsSecureEventInputEnabled(), !appStoreIsFrontmost else {
+            overlayWindow?.orderOut(nil)
+            triggerWindow?.orderOut(nil)
+            return
+        }
+        if let overlayWindow, !overlayWindow.isVisible { overlayWindow.orderFrontRegardless() }
+        if let triggerWindow, !triggerWindow.isVisible { triggerWindow.orderFrontRegardless() }
         presentTrigger()
         let level = Double(UserDefaults.standard.integer(forKey: DefaultsKey.extraBrightnessLevel)) / 100.0
         let headroom = Double(screen.maximumExtendedDynamicRangeColorComponentValue)
