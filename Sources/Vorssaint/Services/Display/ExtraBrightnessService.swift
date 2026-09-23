@@ -284,9 +284,14 @@ final class ExtraBrightnessService: ObservableObject {
     ]
 
     /// Desktop and window-overview transitions composite above ordinary
-    /// screen-saver windows. Keep the multiplier and its headroom trigger at
-    /// the display-shield level so both remain in the final picture.
-    private static let overlayWindowLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))
+    /// screen-saver windows. Keep the multiplier and its headroom trigger
+    /// just below the display-shield level so both remain in the final
+    /// picture, one level below the exact shield level so system security
+    /// UI (SecurityAgent's Touch ID / password panels, e.g. the Mac App
+    /// Store purchase confirmation) still wins the top slot and can render.
+    /// Sharing the exact shield level with the overlay was observed to
+    /// prevent those system panels from appearing at all.
+    private static let overlayWindowLevel = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) - 1)
 
     // MARK: - Overlay
 
