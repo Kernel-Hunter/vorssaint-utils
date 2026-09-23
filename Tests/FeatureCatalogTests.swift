@@ -633,6 +633,11 @@ enum FeatureCatalogTests {
                "a wake owing nothing leaves Bluetooth off")
         suite.expect(!BluetoothSleepSupport.restores(owesRestore: true, isPoweredOn: true),
                "Bluetooth the user switched on first is left alone")
+        var readControllerPower = false
+        func controllerPower() -> Bool { readControllerPower = true; return false }
+        _ = BluetoothSleepSupport.restores(owesRestore: false, isPoweredOn: controllerPower())
+        suite.expect(!readControllerPower,
+               "a launch owing no restore never reads the Bluetooth controller")
 
         suite.expect((Defaults.registeredDefaults[DefaultsKey.panelShowFanControl] as? Bool) == true,
                "installing fan control reveals its panel section by default")
@@ -1108,6 +1113,23 @@ enum FeatureCatalogTests {
         suite.expect(activeSet(.accessibility)
                 == [.windowLayout, .cleaningMode, .commandBar, .screenRecorder],
                "with nothing enabled only on-demand features use accessibility")
+        func radialMenuUsesAccessibility(_ profile: RadialMenuProfile, legacyItems: [RadialMenuItem]) -> Bool {
+            let stored = [DefaultsKey.radialMenuProfiles: RadialMenuSupport.encodeProfiles([profile]),
+                          DefaultsKey.radialMenuItems: RadialMenuSupport.encode(legacyItems)]
+            return AppFeature.activeFeatures(using: .accessibility,
+                                             isAvailable: { _ in true },
+                                             boolFor: { $0 == DefaultsKey.radialMenuEnabled },
+                                             stringFor: { _ in nil },
+                                             dataFor: { stored[$0] ?? nil })
+                .contains(.radialMenu)
+        }
+        let appItem = RadialMenuItem(kind: .app, payload: "/Applications/Safari.app")
+        let shortcutItem = RadialMenuItem(kind: .shortcut, payload: "control+option+command:49")
+        suite.expect(radialMenuUsesAccessibility(
+                    RadialMenuProfile(mouseButton: RadialMenuMouseTrigger.back.rawValue, items: [appItem]),
+                    legacyItems: [appItem])
+                && !radialMenuUsesAccessibility(RadialMenuProfile(items: [appItem]), legacyItems: [shortcutItem]),
+               "radial menu accessibility follows the saved profiles, not the pre-profile wheel")
         suite.expect(activeSet(.accessibility, on: [DefaultsKey.scrollInverterEnabled]).contains(.scrollInverter),
                "an enabled feature counts as using its permission")
         suite.expect(activeSet(.accessibility, on: [DefaultsKey.scrollInverterHorizontalEnabled])
@@ -1308,6 +1330,16 @@ enum FeatureCatalogTests {
                 && GlobalShortcutRole.keyboardBrightnessDecrease.group == .mouseKeyboard
                 && GlobalShortcutRole.keyboardBrightnessIncrease.group == .mouseKeyboard,
                "keyboard brightness stays owned by the brightness service but appears with keyboard controls")
+        let shortcutsPage = ShortcutsPage(state: Expansion())
+        let displayBrightness = shortcutsPage.expansionBinding(for: .brightness, in: .energyDisplay)
+        let keyboardLight = shortcutsPage.expansionBinding(for: .brightness, in: .mouseKeyboard)
+        displayBrightness.wrappedValue = true
+        suite.expect(displayBrightness.wrappedValue && !keyboardLight.wrappedValue,
+               "opening brightness in one shortcut group leaves its row in the other group closed")
+        keyboardLight.wrappedValue = true
+        displayBrightness.wrappedValue = false
+        suite.expect(!displayBrightness.wrappedValue && keyboardLight.wrappedValue,
+               "closing brightness in one shortcut group leaves an open row in the other group open")
         suite.expect(GlobalShortcutRole.keyboardBrightnessDecrease.requiredEnableKeys
                 == [DefaultsKey.keyboardBrightnessShortcutsEnabled]
                 && GlobalShortcutRole.keyboardBrightnessIncrease.requiredEnableKeys
