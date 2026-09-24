@@ -2,7 +2,6 @@
 // Copyright (C) 2026 Vorssaint
 
 import AppKit
-import Carbon.HIToolbox
 import Metal
 import QuartzCore
 
@@ -273,24 +272,38 @@ final class ExtraBrightnessService: ObservableObject {
         NSRect(x: screen.frame.maxX - 1, y: screen.frame.minY, width: 1, height: 1)
     }
 
+    /// Neither window list option works for finding the blocked sheet
+    /// directly: `.optionOnScreenOnly` never lists it, because failing to
+    /// reach the screen while this overlay is up is the bug itself, and
+    /// `.optionAll` carries dozens of stale windows AMSUIPaymentViewService
+    /// leaves registered from earlier purchase attempts long after they are
+    /// dismissed (confirmed live: over 60 on a machine used for nothing but
+    /// this repro), so owner name alone over-matches indefinitely.
+    ///
+    /// SecurityAgent owns the Touch ID / password panel for admin prompts
+    /// and is a real running application for as long as its panel is up, so
+    /// it can be checked directly. The Mac App Store's purchase sheet has no
+    /// equally clean signal, so this falls back to the one thing already
+    /// confirmed to fix that case: the Store itself being frontmost.
+    private static func systemAuthorizationUIIsActive() -> Bool {
+        if !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.SecurityAgent").isEmpty {
+            return true
+        }
+        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.AppStore"
+    }
+
     /// The pair belongs to every Space and sits out Exposé. Bound to a single
     /// Space it travelled with that Space: swiping to another desktop slid the
     /// overlay off screen for the whole animation, taking the boost with it
     /// until the transition ended and a rebuild brought it back (measured).
     /// Resident everywhere there is no handoff at all, and the presents that
-    /// hold the panel's headroom never pause.
-    ///
-    /// `.canJoinAllApplications` was dropped: with it present, SecurityAgent's
-    /// Touch ID / password panel and the Mac App Store's PassKit purchase
-    /// sheet never became visible while the overlay was up, at any window
-    /// level tried (shield level, shield level minus one, screen-saver
-    /// level) and regardless of Secure Event Input state (confirmed off
-    /// throughout a failing repro, so that was not the mechanism either).
-    /// A window that can join every other application's Spaces, not just
-    /// this app's own, is unusual enough that it is the leading remaining
-    /// suspect for whatever check keeps those panels from rendering.
+    /// hold the panel's headroom never pause. `.canJoinAllApplications` keeps
+    /// the boost from dropping as video enters or leaves full screen; removing
+    /// it was tried against the purchase-sheet bug below and did not help, so
+    /// it stays.
     private static let overlayCollectionBehavior: NSWindow.CollectionBehavior = [
-        .ignoresCycle, .fullScreenAuxiliary, .canJoinAllSpaces, .stationary,
+        .ignoresCycle, .fullScreenAuxiliary, .canJoinAllApplications,
+        .canJoinAllSpaces, .stationary,
     ]
 
     /// Desktop and window-overview transitions composite above ordinary
@@ -426,23 +439,18 @@ final class ExtraBrightnessService: ObservableObject {
     private func renderIfNeeded(immediate: Bool = false) {
         guard !screensAsleep else { return }
         guard let screen = overlayScreen, overlayLayer != nil else { return }
-        // Secure Event Input is macOS's signal that a password field wants
-        // the screen to itself; stepping out of the way while it is on is
-        // cheap insurance. It was NOT what caused the Mac App Store's
-        // PassKit purchase sheet to stay hidden behind this overlay in a
-        // reproduced case: the flag read false for the whole failure. Kept
-        // in case it covers some other authorization path, not relied on.
-        //
-        // The App Store itself is the confirmed, reproducible case: its
-        // purchase-authorization sheet (free "Get" installs included, which
-        // still route through a PassKit-style confirmation) stayed hidden
-        // behind this overlay across every window level and collection
-        // behavior tried. Nothing needs the boost while the App Store is
-        // frontmost, so stepping out of the way whenever it is trades away
-        // nothing to stop blocking its purchase flow.
-        let appStoreIsFrontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-            == "com.apple.AppStore"
-        guard !IsSecureEventInputEnabled(), !appStoreIsFrontmost else {
+        // SecurityAgent's Touch ID / password panel and the Mac App Store's
+        // PassKit purchase-authorization sheet (used even for free "Get"
+        // installs, and by in-app purchases in other apps too) both stayed
+        // permanently hidden behind this overlay while it was up, regardless
+        // of window level or collection behavior. Checking the frontmost
+        // app cannot catch every case that matters (an admin password
+        // prompt raised from System Settings, or an in-app purchase started
+        // in a third-party app do not make the App Store frontmost), so
+        // this looks directly for the on-screen window that needs the
+        // screen instead: nothing needs the boost while either is up, and
+        // stepping out of the way costs nothing.
+        guard !Self.systemAuthorizationUIIsActive() else {
             overlayWindow?.orderOut(nil)
             triggerWindow?.orderOut(nil)
             return
