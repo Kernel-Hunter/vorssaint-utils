@@ -441,15 +441,15 @@ final class ExtraBrightnessService: ObservableObject {
         guard let screen = overlayScreen, overlayLayer != nil else { return }
         // SecurityAgent's Touch ID / password panel and the Mac App Store's
         // PassKit purchase-authorization sheet (used even for free "Get"
-        // installs, and by in-app purchases in other apps too) both stayed
-        // permanently hidden behind this overlay while it was up, regardless
-        // of window level or collection behavior. Checking the frontmost
-        // app cannot catch every case that matters (an admin password
-        // prompt raised from System Settings, or an in-app purchase started
-        // in a third-party app do not make the App Store frontmost), so
-        // this looks directly for the on-screen window that needs the
-        // screen instead: nothing needs the boost while either is up, and
-        // stepping out of the way costs nothing.
+        // installs) both stayed permanently hidden behind this overlay while
+        // it was up, regardless of window level or collection behavior.
+        // `systemAuthorizationUIIsActive()` covers exactly two signals:
+        // SecurityAgent running, or the App Store being frontmost. Nothing
+        // needs the boost while either is true, so stepping out of the way
+        // costs nothing. It does NOT cover a purchase sheet opened from a
+        // third-party app's own in-app purchase flow — that would not make
+        // the App Store frontmost, and neither signal here is confirmed to
+        // catch it; that path is still untested and may still be affected.
         guard !Self.systemAuthorizationUIIsActive() else {
             overlayWindow?.orderOut(nil)
             triggerWindow?.orderOut(nil)
